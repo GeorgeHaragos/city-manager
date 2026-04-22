@@ -113,12 +113,16 @@ void log_action(const char *district, const char *role, const char *user, const 
     close(fd);
 }
 
-int add_report(const char *district, const char *inspector_name, double lat, double lon, const char *category, int severity, const char *description){
+int add_report(const char *district, const char *role, const char *inspector_name, double lat, double lon, const char *category, int severity, const char *description){
     char filepath[256];
     snprintf(filepath,sizeof(filepath),"%s/reports.dat",district);
     int fd=open(filepath, O_RDWR | O_CREAT | O_APPEND, 0664);
     if(fd==-1){
         perror("Eroare la deschiderea/crearea reports.dat");
+        return 0;
+    }
+    if(verify_permision(filepath,role, 'w')==0){
+        printf("Rolul %s nu are permisiunea de a scrie in fisierul %s!\n",role,filepath);
         return 0;
     }
     chmod(filepath,0664);//fortam permisiunile pe 644(rw-rw-r--)
@@ -160,9 +164,13 @@ int add_report(const char *district, const char *inspector_name, double lat, dou
     return 1;
 }
 
-void list_reports(const char *district){
+void list_reports(const char *district, const char *role){
     char filepath[256];
     snprintf(filepath,sizeof(filepath), "%s/reports.dat",district);
+    if(verify_permision(filepath,role, 'r')==0){
+        printf("Rolul %s nu are permisiunea de a citi din fisierul %s",role,filepath);
+        return;
+    }
     struct stat st;
     if(stat(filepath,&st)==-1){
         printf("Nu exista rapoarte pentru districtul '%s' sau fisierul nu a putut fi accesat.\n", district);
@@ -197,10 +205,13 @@ void list_reports(const char *district){
     close(fd);
 }
 
-void view_report(const char *district, int target_id){
+void view_report(const char *district, const char *role, int target_id){
     char filepath[256];
     snprintf(filepath,sizeof(filepath),"%s/reports.dat",district);
-
+    if(verify_permision(filepath, role, 'r')==0){
+        printf("Rolul %s nu are acces sa citeasca din fisierul %s!\n",role,filepath);
+        return;
+    }
     int fd=open(filepath,O_RDONLY);
     if(fd==-1){
         printf("Nu s-a putut deschide fisierul de reports!\n");
@@ -230,7 +241,88 @@ void view_report(const char *district, int target_id){
     close(fd);
 }
 
+int update_threshold(const char *district, const char *role, int new_threshold){
+    char filepath[256];
+    snprintf(filepath,sizeof(filepath), "%s/district.cfg" ,district);
+    if(verify_permision(filepath, role, 'w')==0){
+        printf("Rolul %s nu are permisiune de a scrie in fisierul %s",role,filepath);
+        return 0;
+    }
+    struct stat st;
+    if(stat(filepath,&st)==-1){
+        printf("Nu exista fisierul %s",filepath);
+        return 0;
+    }
+    if((st.st_mode & 0777)!=0640){
+        printf("Eroare de securitate!! Permisiunile fisierului au fost alterate (trebuie 640)");
+        return 0;
+    }
+    int fd=open(filepath,O_WRONLY | O_TRUNC);
+    if(fd==-1){
+        printf("Eroare deschidere fisier %s",filepath);
+        return 0;
+    }
+    char buffer[64];
+    snprintf(buffer,sizeof(buffer),"Threshold = %d",new_threshold);
+    write(fd,buffer,strlen(buffer));
+    close(fd);
 
+    printf("Pragul de severitate a fost schimbat pentru districtul %s\n",district);
+    return 1;
+}
+
+int remove_report(const char *district, const char *role, int target_id){
+    char filepath[256];
+    snprintf(filepath,sizeof(filepath),"%s/reports.dat",district);
+    if(verify_permision(district,role, 'w')==0){
+        printf("Rolul %s nu are voie sa modifice strutura directorului %s",role,district);
+        return 0;
+    }
+    int fd=open(filepath,O_RDWR);
+    if(fd==-1){
+        printf("Eroare deschidere fisier!\n");
+        return 0;
+    }
+    Report r;
+    off_t target_offset=-1;
+    off_t current_offset=0;
+
+    while(read(fd,&r,sizeof(Report))==sizeof(Report)){
+        if(r.id==target_id){
+            target_offset=current_offset;
+            break;
+        }
+        current_offset+=sizeof(Report);
+    }
+    if(target_offset==-1){
+        printf("Nu a fost gasit raportul cu ID-ul %d",target_id);
+        close(fd);
+        return 0;
+    }
+
+    off_t read_pos=target_offset +sizeof(Report);
+    off_t write_pos = target_offset;
+
+    while(1){
+        lseek(fd,read_pos,SEEK_SET);
+        ssize_t bytes_read = read(fd,&r,sizeof(Report));
+        if(bytes_read<=0){
+            break;
+        }
+        lseek(fd,write_pos,SEEK_SET);
+        write(fd,&r,sizeof(Report)); //suprascriem peste reportul pe care vrem sa il stergem
+        read_pos+=sizeof(Report);
+        write_pos+=sizeof(Report);
+    }
+    if(ftruncate(fd, write_pos)==-1){
+        printf("Eroare la trunchierea fisierului!\n");
+        return 0;
+    }else {
+        printf("Raportul %d a fost sters cu succes!\n",target_id);
+    }
+    close(fd);
+    return 1;
+}
 
 int main(int argc, char *argv[]){
     char *role=NULL;
@@ -260,11 +352,11 @@ int main(int argc, char *argv[]){
 
     setup_district(district);
     if(strcmp(operation,"add")==0){
-        add_report(district, user, 42.07, 21.93, "road", 2, "Groapa de pe banda 2");
+        add_report(district, role, user, 42.07, 21.93, "road", 2, "Groapa de pe banda 2");
         log_action(district, role, user, "Added report\n");
     }
     else if (strcmp(operation,"list")==0) {
-        list_reports(district);
+        list_reports(district,role);
         log_action(district,role,user,"Listed all reports\n");
     }
     else if (strcmp(operation,"view")==0){
@@ -272,7 +364,24 @@ int main(int argc, char *argv[]){
             printf("Operatia --view necesita un ID de raport.\n");
             return -1;
         }
-        view_report(district, atoi(extra_arg));
+        view_report(district,role, atoi(extra_arg));
         log_action(district, role, user,"Viewed report\n");
+    }
+    else if (strcmp(operation,"update")==0){
+        if(!extra_arg){
+            printf("Operatia --update_threshold are nevoie de un nou threshold.\n");
+            return -1;
+        }
+        update_threshold(district,role, atoi(extra_arg));
+        log_action(district,role,user,"Updated the threshold.\n");
+    }
+    else if (strcmp(operation, "remove")==0){
+        if(!extra_arg){
+            printf("Operatioa --remove_report are nevoie de un ID de report!\n");
+            return -1;
+        }
+        if(remove_report(district,role, atoi(extra_arg))){
+            log_action(district, role,user,"Removed a report.\n");
+        }
     }
 }

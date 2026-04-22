@@ -108,7 +108,7 @@ void log_action(const char *district, const char *role, const char *user, const 
     char log_entry[512];
     time_t now=time(NULL);
     char *time_str=strtok(ctime(&now),"\n"); //salvam timpul curent intr-un string
-    snprintf(log_entry,sizeof(log_entry),"[%s]User %s | Role %s | Action %s\n", time_str, user, role, action);
+    snprintf(log_entry,sizeof(log_entry),"[%s]User %s | Role %s | Action %s", time_str, user, role, action);
     write(fd, log_entry,strlen(log_entry));
     close(fd);
 }
@@ -164,8 +164,8 @@ void list_reports(const char *district){
     char filepath[256];
     snprintf(filepath,sizeof(filepath), "%s/reports.dat",district);
     struct stat st;
-    if(stat(filepath,st)==-1){
-        printf("Nu exista rapoarte pentru districtul '%s' sau fisierul nu a putut fi accesat.\n", district_id);
+    if(stat(filepath,&st)==-1){
+        printf("Nu exista rapoarte pentru districtul '%s' sau fisierul nu a putut fi accesat.\n", district);
         return;
     }
 
@@ -176,11 +176,11 @@ void list_reports(const char *district){
 
     printf("\n--- Informatii fisier: %s ---\n", filepath);
     printf("Permisiuni: %s\n", permisions);
-    printf("Dimensiune: %ld bytes\n", st.st_size);
+    printf("Dimensiune: %lld bytes\n", st.st_size);
     printf("Ultima modificare: %s\n", mtime_str);
     printf("---------------------------------------\n\n");
 
-    int fd=(filepath,O_RDONLY); //deschidem fisierul doar pentru citire
+    int fd=open(filepath,O_RDONLY); //deschidem fisierul doar pentru citire
     if(fd==-1) return;
 
     Report r;
@@ -197,6 +197,38 @@ void list_reports(const char *district){
     close(fd);
 }
 
+void view_report(const char *district, int target_id){
+    char filepath[256];
+    snprintf(filepath,sizeof(filepath),"%s/reports.dat",district);
+
+    int fd=open(filepath,O_RDONLY);
+    if(fd==-1){
+        printf("Nu s-a putut deschide fisierul de reports!\n");
+        return;
+    }
+
+    Report r;
+    int found=0; //flag pentru a semnala ca am gasit reportul cu ID ul cautat
+
+    while(read(fd,&r,sizeof(Report))==sizeof(Report)){
+        if(r.id==target_id){
+            printf("\n=== DETALII RAPORT #%d ===\n", r.id);
+            printf("Data: %s", ctime(&r.timestamp)); // ctime pune automat \n la final
+            printf("Inspector: %s\n", r.inspector);
+            printf("Categorie: %s\n", r.category);
+            printf("Severitate: %d\n", r.severity);
+            printf("Coordonate GPS: %.6f, %.6f\n", r.lat, r.lon);
+            printf("Descriere: %s\n", r.description);
+            printf("==========================\n\n");
+            found=1;
+            break;
+        }
+    }
+    if(found==0){
+        printf("Nu am gasit reportul cu ID-ul %d in districtul %s",target_id,district);
+    }
+    close(fd);
+}
 
 
 
@@ -229,6 +261,18 @@ int main(int argc, char *argv[]){
     setup_district(district);
     if(strcmp(operation,"add")==0){
         add_report(district, user, 42.07, 21.93, "road", 2, "Groapa de pe banda 2");
-        log_action(district, role, user, "Added report");
+        log_action(district, role, user, "Added report\n");
+    }
+    else if (strcmp(operation,"list")==0) {
+        list_reports(district);
+        log_action(district,role,user,"Listed all reports\n");
+    }
+    else if (strcmp(operation,"view")==0){
+        if(!extra_arg){
+            printf("Operatia --view necesita un ID de raport.\n");
+            return -1;
+        }
+        view_report(district, atoi(extra_arg));
+        log_action(district, role, user,"Viewed report\n");
     }
 }

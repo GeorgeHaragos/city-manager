@@ -9,6 +9,8 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <time.h>
+#include <dirent.h>
+
 
 #define MAX_STR 32
 #define MAX_DESC 256
@@ -25,6 +27,37 @@ typedef struct {
 } Report;
 
 
+void check_and_cleanup_symlinks() {
+    // Deschidem directorul curent (".")
+    DIR *dir = opendir(".");
+    if (!dir) return;
+
+    struct dirent *entry;
+    
+    // Citim fiecare element din folder unul câte unul
+    while ((entry = readdir(dir)) != NULL) {
+        
+        // Căutăm doar fișierele care încep cu "active_reports-"
+        if (strncmp(entry->d_name, "active_reports-", 15) == 0) {
+            struct stat lst, st;
+            
+            if (lstat(entry->d_name, &lst) == 0 && S_ISLNK(lst.st_mode)) {
+                
+                // 2. Folosim stat() pentru a verifica dacă DESTINAȚIA există
+                if (stat(entry->d_name, &st) == -1) {
+                    printf("Avertisment: S-a detectat un symlink orfan '%s'. Se curata...\n", entry->d_name);
+                    
+                    if (unlink(entry->d_name) == -1) {
+                        perror("Eroare fatala la stergerea symlink-ului (unlink a esuat)");
+                    } else {
+                        printf("Symlink-ul '%s' a fost sters cu succes.\n", entry->d_name);
+                    }
+                }
+            }
+        }
+    }
+    closedir(dir);
+}
 
 //creearea(daca e nevoie) si initializarea fisierelor corespunzatoare directoryului corespunzator (district.cfg si simlinkurile)
 void setup_district(const char *district_ID){
@@ -72,7 +105,7 @@ void mode_to_string(mode_t mode, char *str){
 
 int verify_permision(const char *filepath, const char *role, char tip_acces){
     struct stat st;
-    if(stat(filepath,&st)==-1){
+    if(lstat(filepath,&st)==-1){
         fprintf(stderr,"Fisier inexistent\n");
         return 0;
     }
@@ -159,7 +192,7 @@ int add_report(const char *district, const char *role, const char *inspector_nam
         close(fd);
         return 0;
     }
-    printf("Raportul #%d a fost adaugat cu succes in %s",new_report.id,district);
+    printf("Raportul #%d a fost adaugat cu succes in %s\n",new_report.id,district);
     close(fd);
     return 1;
 }
@@ -172,7 +205,7 @@ void list_reports(const char *district, const char *role){
         return;
     }
     struct stat st;
-    if(stat(filepath,&st)==-1){
+    if(lstat(filepath,&st)==-1){
         printf("Nu exista rapoarte pentru districtul '%s' sau fisierul nu a putut fi accesat.\n", district);
         return;
     }
@@ -249,7 +282,7 @@ int update_threshold(const char *district, const char *role, int new_threshold){
         return 0;
     }
     struct stat st;
-    if(stat(filepath,&st)==-1){
+    if(lstat(filepath,&st)==-1){
         printf("Nu exista fisierul %s",filepath);
         return 0;
     }
@@ -324,13 +357,168 @@ int remove_report(const char *district, const char *role, int target_id){
     return 1;
 }
 
+int parse_condition(const char *input, char *field, char *op, char *value) {
+    // Verificăm pointerii pentru a preveni crash-uri
+    if (!input || !field || !op || !value) {
+        return 0;
+    }
+
+    // 1. Găsim primul ':'
+    const char *first_colon = strchr(input, ':');
+    if (!first_colon) {
+        return 0; // Format invalid
+    }
+
+    // 2. Găsim al doilea ':'
+    const char *second_colon = strchr(first_colon + 1, ':');
+    if (!second_colon) {
+        return 0; // Format invalid
+    }
+
+    // 3. Extragem 'field'
+    size_t field_len = first_colon - input;
+    strncpy(field, input, field_len);
+    field[field_len] = '\0';
+
+    // 4. Extragem 'operator'
+    size_t op_len = second_colon - (first_colon + 1);
+    strncpy(op, first_colon + 1, op_len);
+    op[op_len] = '\0';
+
+    // 5. Extragem 'value' (tot restul string-ului de după al doilea ':')
+    strcpy(value, second_colon + 1);
+
+    // 6. Validăm 'field' (suportate: severity, category, inspector, timestamp)
+    int valid_field = (strcmp(field, "severity") == 0 ||
+                       strcmp(field, "category") == 0 ||
+                       strcmp(field, "inspector") == 0 ||
+                       strcmp(field, "timestamp") == 0);
+
+    // 7. Validăm 'operator' (suportate: ==, !=, <, <=, >, >=)
+    int valid_op = (strcmp(op, "==") == 0 ||
+                    strcmp(op, "!=") == 0 ||
+                    strcmp(op, "<") == 0 ||
+                    strcmp(op, "<=") == 0 ||
+                    strcmp(op, ">") == 0 ||
+                    strcmp(op, ">=") == 0);
+
+    // Dacă vreuna din componente nu este validă, respingem condiția
+    if (!valid_field || !valid_op) {
+        return 0; 
+    }
+
+    return 1; // Succes
+}
+
+int match_condition(Report *r, const char *field, const char *op, const char *value) {
+    // Verificăm pointerii pentru siguranță
+    if (!r) {
+        return 0;
+    }
+
+    // --- 1. Evaluare pentru câmpul 'severity' (Tip: int) ---
+    if (strcmp(field, "severity") == 0) {
+        int v = atoi(value); // Convertim string-ul în int
+        
+        if (strcmp(op, "==") == 0) return r->severity == v;
+        if (strcmp(op, "!=") == 0) return r->severity != v;
+        if (strcmp(op, "<") == 0)  return r->severity < v;
+        if (strcmp(op, "<=") == 0) return r->severity <= v;
+        if (strcmp(op, ">") == 0)  return r->severity > v;
+        if (strcmp(op, ">=") == 0) return r->severity >= v;
+    }
+    
+    // --- 2. Evaluare pentru câmpul 'timestamp' (Tip: time_t) ---
+    else if (strcmp(field, "timestamp") == 0) {
+        // time_t este de obicei un long integer (secunde de la Epoch)
+        time_t v = (time_t)strtoll(value, NULL, 10);
+        
+        if (strcmp(op, "==") == 0) return r->timestamp == v;
+        if (strcmp(op, "!=") == 0) return r->timestamp != v;
+        if (strcmp(op, "<") == 0)  return r->timestamp < v;
+        if (strcmp(op, "<=") == 0) return r->timestamp <= v;
+        if (strcmp(op, ">") == 0)  return r->timestamp > v;
+        if (strcmp(op, ">=") == 0) return r->timestamp >= v;
+    }
+    
+    // --- 3. Evaluare pentru 'category' sau 'inspector' (Tip: string) ---
+    else if (strcmp(field, "category") == 0 || strcmp(field, "inspector") == 0) {
+        // Alegem ce câmp din structură verificăm
+        const char *r_val = (strcmp(field, "category") == 0) ? r->category : r->inspector;
+        
+        // Comparam string-urile (returnează 0 pentru egal, <0 sau >0 altfel)
+        int cmp = strcmp(r_val, value);
+        
+        if (strcmp(op, "==") == 0) return cmp == 0;
+        if (strcmp(op, "!=") == 0) return cmp != 0;
+        if (strcmp(op, "<") == 0)  return cmp < 0;
+        if (strcmp(op, "<=") == 0) return cmp <= 0;
+        if (strcmp(op, ">") == 0)  return cmp > 0;
+        if (strcmp(op, ">=") == 0) return cmp >= 0;
+    }
+    // Dacă ajungem aici, câmpul sau operatorul nu este recunoscut
+    return 0;
+}
+
+
+void filter_reports(const char *district_id, int condition_count, char *conditions[]) {
+    char filepath[256];
+    snprintf(filepath, sizeof(filepath), "%s/reports.dat", district_id);
+
+    int fd = open(filepath, O_RDONLY);
+    if (fd == -1) {
+        printf("Nu s-a putut deschide fisierul de rapoarte pentru filtrare.\n");
+        return;
+    }
+
+    Report r;
+    int found_any = 0;
+
+    printf("\n--- Rezultatele filtrarii pentru '%s' ---\n", district_id);
+
+    // Citim binar structură cu structură
+    while (read(fd, &r, sizeof(Report)) == sizeof(Report)) {
+        int matches_all = 1; // Presupunem inițial că raportul trece testul
+
+        // Trecem raportul prin toate condițiile date în terminal
+        for (int i = 0; i < condition_count; i++) {
+            char field[32], op[4], value[64];
+            
+            if (parse_condition(conditions[i], field, op, value)) {
+                // Dacă PICĂ măcar o condiție, setăm flag-ul pe 0 și oprim bucla FOR
+                if (!match_condition(&r, field, op, value)) {
+                    matches_all = 0;
+                    break; 
+                }
+            } else {
+                printf("Avertisment: Conditia '%s' este scrisa gresit si a fost ignorata.\n", conditions[i]);
+            }
+        }
+
+        // Dacă a trecut cu brio de TOATE condițiile, îl afișăm
+        if (matches_all) {
+            char *time_str = strtok(ctime(&r.timestamp), "\n");
+            printf("[ID: %d] %s - Severitate: %d | Categ: %s | Insp: %s\n", 
+                   r.id, time_str, r.severity, r.category, r.inspector);
+            found_any = 1;
+        }
+    }
+
+    if (!found_any) {
+        printf("Niciun raport nu respecta criteriile selectate.\n");
+    }
+
+    close(fd);
+}
+
 int main(int argc, char *argv[]){
     char *role=NULL;
     char *user=NULL;
     char *district=NULL;
     char *operation=NULL;
     char *extra_arg=NULL;
-
+    char *filter_conditions[10]; 
+    int filter_count = 0;
 
     for(int i=1;i<argc;i++){
 
@@ -342,7 +530,16 @@ int main(int argc, char *argv[]){
         else if(strcmp(argv[i],"--view")==0 && i+2<argc){operation="view"; district=argv[++i]; extra_arg=argv[++i];}
         else if(strcmp(argv[i],"--remove_report")==0 && i+2<argc){operation="remove"; district=argv[++i]; extra_arg=argv[++i];}
         else if(strcmp(argv[i],"--update_threshold")==0 && i+2<argc){operation="update"; district=argv[++i]; extra_arg=argv[++i];}
-        else if(strcmp(argv[i],"--filter")==0 && i+2<argc){operation="filter"; district=argv[++i]; extra_arg=argv[++i];}
+        else if(strcmp(argv[i], "--filter") == 0 && i + 1 < argc) {
+            operation = "filter"; 
+            district = argv[++i]; 
+            
+            // Cât timp mai avem argumente și ele NU încep cu "--" (adică nu sunt altă comandă)
+            while (i + 1 < argc && strncmp(argv[i + 1], "--", 2) != 0) {
+                filter_conditions[filter_count++] = argv[++i];
+            }
+        }
+
     }
     //conditia de a fi utilizat corect programul
     if(!role || !user || !district || !operation){
@@ -350,9 +547,29 @@ int main(int argc, char *argv[]){
         return -1;
     }
 
+    check_and_cleanup_symlinks();
+
     setup_district(district);
     if(strcmp(operation,"add")==0){
-        add_report(district, role, user, 42.07, 21.93, "road", 2, "Groapa de pe banda 2");
+        double lat,lon;
+        char category[MAX_STR];
+        char desc[MAX_DESC];
+        int severity;
+        int c,i=0;
+        printf("Introduceti informatiile despre report:\n");
+        printf("===========================");
+        printf("\nLatitudine: ");
+        scanf("%lf",&lat);
+        printf("Longitudine: ");
+        scanf("%lf",&lon);
+        printf("Categoria reportului: ");
+        scanf("%s",category);
+        printf("Severitate: ");
+        scanf("%d",&severity);
+        printf("Descriere succinta a reportului:");
+        getchar();
+        while((c=getchar())!='\n' && i<256) desc[i++]=c;
+        add_report(district, role, user, lat, lon, category,severity, desc);
         log_action(district, role, user, "Added report\n");
     }
     else if (strcmp(operation,"list")==0) {
@@ -384,4 +601,13 @@ int main(int argc, char *argv[]){
             log_action(district, role,user,"Removed a report.\n");
         }
     }
+    else if (strcmp(operation, "filter") == 0) {
+        if (filter_count == 0) {
+            printf("Eroare: Comanda --filter necesita cel putin o conditie.\n");
+            return -1;
+        }
+        filter_reports(district, filter_count, filter_conditions);
+        log_action(district, role, user, "Filtered reports");
+    }
+    return 0;
 }

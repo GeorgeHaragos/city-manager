@@ -11,7 +11,6 @@
 #include <time.h>
 #include <dirent.h>
 
-
 #define MAX_STR 32
 #define MAX_DESC 256
 
@@ -154,11 +153,11 @@ int add_report(const char *district, const char *role, const char *inspector_nam
         perror("Eroare la deschiderea/crearea reports.dat");
         return 0;
     }
+    chmod(filepath,0664);//fortam permisiunile pe 644(rw-rw-r--)
     if(verify_permision(filepath,role, 'w')==0){
         printf("Rolul %s nu are permisiunea de a scrie in fisierul %s!\n",role,filepath);
         return 0;
     }
-    chmod(filepath,0664);//fortam permisiunile pe 644(rw-rw-r--)
     Report new_report;
     //initializam toata structura cu 0 ca sa nu avem probleme cu octetii de padding care incearca sa fie scrisi in fisierul binar
     memset(&new_report,0,sizeof(Report));
@@ -461,9 +460,9 @@ int match_condition(Report *r, const char *field, const char *op, const char *va
 }
 
 
-void filter_reports(const char *district_id, int condition_count, char *conditions[]) {
+void filter_reports(const char *district, int condition_count, char *conditions[]) {
     char filepath[256];
-    snprintf(filepath, sizeof(filepath), "%s/reports.dat", district_id);
+    snprintf(filepath, sizeof(filepath), "%s/reports.dat", district);
 
     int fd = open(filepath, O_RDONLY);
     if (fd == -1) {
@@ -474,7 +473,7 @@ void filter_reports(const char *district_id, int condition_count, char *conditio
     Report r;
     int found_any = 0;
 
-    printf("\n--- Rezultatele filtrarii pentru '%s' ---\n", district_id);
+    printf("\n--- Rezultatele filtrarii pentru '%s' ---\n", district);
 
     // Citim binar structură cu structură
     while (read(fd, &r, sizeof(Report)) == sizeof(Report)) {
@@ -511,6 +510,19 @@ void filter_reports(const char *district_id, int condition_count, char *conditio
     close(fd);
 }
 
+int remove_district(const char *district, const char *role){
+    if(verify_permision(district, role, 'w')==0){
+        printf("Rolul %s nu are voie sa modifice strutura directorului %s",role,district);
+        return 0;
+    }
+    pid_t pid=fork();
+    if(pid==0){
+        if(execlp("rm","rm","-rf",district)== -1)
+            return 0;
+    }
+    return 1;
+}
+
 int main(int argc, char *argv[]){
     char *role=NULL;
     char *user=NULL;
@@ -539,6 +551,7 @@ int main(int argc, char *argv[]){
                 filter_conditions[filter_count++] = argv[++i];
             }
         }
+        else if(strcmp(argv[i],"--remove_district")==0 && i+1<argc){operation="remove_dist"; district=argv[++i];}
 
     }
     //conditia de a fi utilizat corect programul
@@ -607,7 +620,12 @@ int main(int argc, char *argv[]){
             return -1;
         }
         filter_reports(district, filter_count, filter_conditions);
-        log_action(district, role, user, "Filtered reports");
+        log_action(district, role, user, "Filtered reports.\n");
+    }
+    else if (strcmp(operation,"remove_dist")==0){
+        if(remove_district(district, role)==1){
+            log_action(district, role, user, "Removed a district.\n");
+        }
     }
     return 0;
 }

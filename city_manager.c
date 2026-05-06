@@ -1,15 +1,15 @@
-#include <stdlib.h>
 #include <string.h>
 #include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <string.h>
 #include <unistd.h>
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <time.h>
 #include <dirent.h>
+#include <sys/wait.h>
+#include <signal.h>
 
 #define MAX_STR 32
 #define MAX_DESC 256
@@ -515,10 +515,21 @@ int remove_district(const char *district, const char *role){
         printf("Rolul %s nu are voie sa modifice strutura directorului %s",role,district);
         return 0;
     }
+    char linkname[256];
+    snprintf(linkname, sizeof(linkname), "activ_reports-%s",district);
+    unlink(linkname); //stergem soft linkul
     pid_t pid=fork();
-    if(pid==0){
-        if(execlp("rm","rm","-rf",district)== -1)
-            return 0;
+    if (pid==-1){//eroare fork
+        printf("Eroare la fork()\n");
+        return 0;
+    }
+    else if(pid==0){//proces copil
+        execlp("rm","rm","-rf",district,NULL); //daca trece de linia asta inseamna ca nu a functionat execlp
+        return 0;
+    }
+    else{//proces parinte
+        wait(NULL);
+        printf("District %s sters cu succes!\n",district);
     }
     return 1;
 }
@@ -582,8 +593,26 @@ int main(int argc, char *argv[]){
         printf("Descriere succinta a reportului:");
         getchar();
         while((c=getchar())!='\n' && i<256) desc[i++]=c;
-        add_report(district, role, user, lat, lon, category,severity, desc);
-        log_action(district, role, user, "Added report\n");
+        if(add_report(district, role, user, lat, lon, category,severity, desc)){
+            log_action(district, role, user, "Added report\n");    
+            int fd = open(".monitor_pid", O_RDONLY);
+            int notified = 0;
+            if (fd != -1) {
+                char buf[32] = {0}; 
+                if (read(fd, buf, sizeof(buf) - 1) > 0) {
+                    pid_t monitor_pid = atoi(buf); // Convertim string în integer (PID)
+                    if (monitor_pid > 0 && kill(monitor_pid, SIGUSR1) == 0) {
+                        notified = 1;
+                    }
+                }
+                close(fd);
+            }
+            if (notified) {
+                log_action(district, role, user, "Info: Monitor notified successfully of the new report\n");
+            } else {
+                log_action(district, role, user, "Error: Monitor could not be informed of the event\n");
+            }
+        }
     }
     else if (strcmp(operation,"list")==0) {
         list_reports(district,role);

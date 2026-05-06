@@ -1,0 +1,4 @@
+[Wed May  6 17:32:00 2026]User negru | Role manager | Action Added report
+[Wed May  6 17:32:00 2026]User negru | Role manager | Action Error: Monitor could not be informed of the event
+[Wed May  6 17:32:52 2026]User negru | Role manager | Action Added report
+[Wed May  6 17:32:52 2026]User negru | Role manager | Action Info: Monitor notified successfully of the new report

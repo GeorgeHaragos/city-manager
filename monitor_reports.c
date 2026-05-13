@@ -15,13 +15,28 @@ void handle_sigint(int sig) {
 }
 
 // Handler pentru SIGUSR1 (Notificare de la city_manager că s-a adăugat un raport)
- 
 void handle_sigusr1(int sig) {
     const char *msg = "[Monitor] ALERTA: Un nou raport a fost adaugat intr-un district!\n";
     write(STDOUT_FILENO, msg, strlen(msg));
 }
 
 int main() {
+    
+    setbuf(stdout, NULL);
+    // Verificăm dacă există deja un monitor care rulează
+    int fd_check = open(".monitor_pid", O_RDONLY);
+    if (fd_check != -1) {
+        char buf[32];
+        ssize_t n = read(fd_check, buf, sizeof(buf) - 1);
+        if (n > 0) {
+            buf[n] = '\0';
+            // Afișăm eroarea (aceasta se va duce prin pipe către hub_mon)
+            printf("EROARE: Monitorul ruleaza deja cu PID-ul %s", buf);
+            close(fd_check);
+            return 1; // Ieșim imediat
+        }
+        close(fd_check);
+    }
     struct sigaction sa_int, sa_usr;
 
     sa_int.sa_handler = handle_sigint;

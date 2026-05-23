@@ -8,7 +8,6 @@
 #define MAX_DESC 256
 #define MAX_INSPECTORS 100
 
-// Aceeași structură pe care am folosit-o în city_manager
 typedef struct {
     int id;
     char inspector[MAX_STR];
@@ -46,11 +45,10 @@ int main(int argc, char *argv[]) {
 
     while (read(fd, &r, sizeof(Report)) == sizeof(Report)) {
         int found = 0;
-        // Căutăm dacă am mai calculat ceva pentru acest inspector
         for (int i = 0; i < num_inspectors; i++) {
             if (strcmp(scores[i].name, r.inspector) == 0) {
                 scores[i].workload += r.severity;
-                found = 1;
+                found = 1;//deja avem inspectorul in structura
                 break;
             }
         }
@@ -62,12 +60,8 @@ int main(int argc, char *argv[]) {
         }
     }
     close(fd);
-
-    // Afișăm rezultatele (acestea se vor duce în pipe-ul din city_hub)
-    printf("--- Rezultate District: %s ---\n", argv[1]);
     for (int i = 0; i < num_inspectors; i++) {
-        printf("Inspector: %s | Scor Severitate: %d\n", scores[i].name, scores[i].workload);
+        printf("%s %d\n", scores[i].name, scores[i].workload);
     }
-
     return 0;
 }

@@ -556,8 +556,6 @@ int main(int argc, char *argv[]){
         else if(strcmp(argv[i], "--filter") == 0 && i + 1 < argc) {
             operation = "filter"; 
             district = argv[++i]; 
-            
-            // Cât timp mai avem argumente și ele NU încep cu "--" (adică nu sunt altă comandă)
             while (i + 1 < argc && strncmp(argv[i + 1], "--", 2) != 0) {
                 filter_conditions[filter_count++] = argv[++i];
             }
